@@ -1,0 +1,113 @@
+heat_template_version: 2016-04-08
+
+#
+# you can deploy this template using the following command:
+# 'openstack stack create -t server.yaml -e env.yaml <Stack Name>'
+#
+
+description: Simple template to deploy a single compute instance.
+
+parameters:
+  public_network:
+    type: string
+    default: ext-net
+  flavor:
+    type: string
+    constraints:
+      - custom_constraint: nova.flavor
+  image:
+    type: string
+    constraints:
+      - custom_constraint: glance.image
+  ssh_keys:
+    type: comma_delimited_list
+
+resources:
+
+  net:
+    type: OS::Neutron::Net
+    properties: 
+      name:
+        list_join: [ '-', [ { get_param: "OS::stack_name" }, 'net' ]]
+
+  subnet:
+    type: OS::Neutron::Subnet
+    depends_on: [ net ]
+    properties:
+      name: subnet
+      dns_nameservers:
+        - 8.8.8.8
+        - 8.8.4.4
+      network: { get_resource: net }
+      ip_version: 4
+      cidr: 10.0.0.0/24
+      allocation_pools:
+      - { start: 10.0.0.10, end: 10.0.0.250 }
+
+  router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info: {"network": { get_param: public_network }}
+
+  router_subnet_connect:
+    type: OS::Neutron::RouterInterface
+    depends_on: [ subnet, router ]
+    properties:
+      router: { get_resource: router }
+      subnet: { get_resource: subnet }
+
+  allow_ssh:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      description: allow incoming SSH and ICMP traffic from anywhere.
+      name: 
+        list_join: [ '-', [ { get_param: "OS::stack_name" }, 'allow incoming traffic, tcp port 22 and icmp']]
+      rules: 
+        - { direction: ingress, remote_ip_prefix: 0.0.0.0/0, port_range_min: 22, port_range_max: 22, protocol: tcp } 
+        - { direction: ingress, remote_ip_prefix: 0.0.0.0/0, protocol: icmp } 
+
+  host:
+    type: OS::Nova::Server
+    depends_on: [ cloud-init-config, port ]
+    properties:
+      name: 
+        list_join: [ '-', [ { get_param: "OS::stack_name" }, 'server' ]]
+      user_data_format: RAW
+      user_data: { get_resource: cloud-init-config }    
+      image: { get_param: image }
+      flavor: { get_param: flavor } 
+      networks:
+        - port: { get_resource: port }
+
+  cloud-init-config:
+   # cloud init resource
+   type: OS::Heat::CloudConfig
+   properties:
+    cloud_config:
+      manage_etc_hosts: true
+      users:
+        - name: cloud-user
+          gecos: Cloud User
+          sudo: ALL=(ALL) NOPASSWD:ALL
+          shell: /bin/bash
+          lock-passwd: false
+          ssh-authorized-keys: { get_param: ssh_keys }  
+
+  port:
+    type: OS::Neutron::Port
+    depends_on: [ allow_ssh ]
+    properties:
+      network: { get_resource: net }
+      security_groups: [ get_resource: allow_ssh ]
+
+  floating_ip:
+    type: OS::Neutron::FloatingIP
+    depends_on: [ port, router_subnet_connect ]
+    properties:
+      floating_network: { get_param: public_network }
+      port_id: { get_resource: port }
+
+outputs:
+  public_ip:
+    description: The floating IP assigned to the deployed instance
+    value: { get_attr: [ floating_ip, floating_ip_address ] }

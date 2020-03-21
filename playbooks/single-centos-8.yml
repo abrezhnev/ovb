@@ -1,0 +1,14 @@
+---
+- hosts: localhost
+  tasks:
+    - name: create stack
+      register: stack_create
+      os_stack:
+        name: ovb-centos8
+        state: present
+        template: "heat-templates/server.yaml"
+        environment:
+          - "environments/env.yaml"
+        parameters:
+          flavor: bmc
+          image: CentOS-8-GenericCloud-8.1.1911
